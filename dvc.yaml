@@ -1,0 +1,1142 @@
+stages:
+  # Dataset preparation
+  whitebalance_SHIDC_B_Ki_67_subset_dataset:
+    cmd: python src/whitebalance_dataset.py
+      --source_coco ${SHIDC_B_Ki_67_subset_dataset}/train/train.json
+      --dest_dir ${SHIDC_B_Ki_67_subset_dataset}_transformed/train &&
+      python src/whitebalance_dataset.py
+      --source_coco ${SHIDC_B_Ki_67_subset_dataset}/test/test.json
+      --dest_dir ${SHIDC_B_Ki_67_subset_dataset}_transformed/test
+    deps:
+      - src/whitebalance_dataset.py
+      - ${SHIDC_B_Ki_67_subset_dataset}
+    params:
+      - SHIDC_B_Ki_67_subset_dataset
+    outs:
+      - ${SHIDC_B_Ki_67_subset_dataset}_transformed/train/train.json
+      - ${SHIDC_B_Ki_67_subset_dataset}_transformed/test/test.json
+
+  prepare_yolo_SHIDC_B_Ki_67_subset_dataset:
+    cmd: python src/convert_coco_to_yolov4.py
+      ${SHIDC_B_Ki_67_subset_dataset}_transformed
+    deps:
+      - src/convert_coco_to_yolov4.py
+      - ${SHIDC_B_Ki_67_subset_dataset}_transformed/train/train.json
+      - ${SHIDC_B_Ki_67_subset_dataset}_transformed/test/test.json
+    params:
+      - SHIDC_B_Ki_67_subset_dataset
+    outs:
+      - ${SHIDC_B_Ki_67_subset_dataset}_transformed/train/train.txt
+      - ${SHIDC_B_Ki_67_subset_dataset}_transformed/test/test.txt
+
+  prepare_pathonet_SHIDC_B_Ki_67_subset_dataset:
+    cmd:
+      cp -r ${SHIDC_B_Ki_67_subset_dataset}_transformed ${SHIDC_B_Ki_67_subset_dataset}_transformed_pathonet &&
+      python src/convert_coco_to_pathonet.py ${SHIDC_B_Ki_67_subset_dataset}_transformed_pathonet &&
+      mkdir -p ${SHIDC_B_Ki_67_subset_dataset}_transformed_pathonet/train_pathonet &&
+      mkdir -p ${SHIDC_B_Ki_67_subset_dataset}_transformed_pathonet/test_pathonet &&
+      cd src/PathoNet &&
+      python preprocessing.py -i ../../${SHIDC_B_Ki_67_subset_dataset}_transformed_pathonet/train -o ../../${SHIDC_B_Ki_67_subset_dataset}_transformed_pathonet/train_pathonet &&
+      python preprocessing.py -i ../../${SHIDC_B_Ki_67_subset_dataset}_transformed_pathonet/test -o ../../${SHIDC_B_Ki_67_subset_dataset}_transformed_pathonet/test_pathonet
+    deps:
+      - src/convert_coco_to_pathonet.py
+      - ${SHIDC_B_Ki_67_subset_dataset}_transformed/train/train.json
+      - ${SHIDC_B_Ki_67_subset_dataset}_transformed/test/test.json
+    params:
+      - SHIDC_B_Ki_67_subset_dataset
+    outs:
+      - ${SHIDC_B_Ki_67_subset_dataset}_transformed_pathonet/train_pathonet
+      - ${SHIDC_B_Ki_67_subset_dataset}_transformed_pathonet/test_pathonet
+
+  # Training
+  train_faster_rcnn_model:
+    foreach:
+      - resnet50
+      - resnet101
+      - resnet152
+    do:
+      cmd: python src/faster_rcnn.py
+        --dirpath logs/faster_rcnn_${item}_transformed
+        --backbone ${item}
+        --group faster_rcnn_${item}
+        --ds_data_dir ${SHIDC_B_Ki_67_subset_dataset}
+        ${common_train_params}
+      deps:
+        - src/faster_rcnn.py
+        - ${SHIDC_B_Ki_67_subset_dataset}_transformed
+      params:
+        - SHIDC_B_Ki_67_subset_dataset
+        - common_train_params
+      outs:
+        - logs/faster_rcnn_${item}_transformed/best.ckpt
+
+  train_retinanet_model:
+    foreach:
+      - resnet50
+      - resnet101
+      - resnet152
+    do:
+      cmd: python src/retinanet.py
+        --dirpath logs/retinanet_${item}_transformed
+        --backbone ${item}
+        --group retinanet_${item}
+        --ds_data_dir ${SHIDC_B_Ki_67_subset_dataset}
+        ${common_train_params}
+      deps:
+        - src/retinanet.py
+        - ${SHIDC_B_Ki_67_subset_dataset}_transformed
+      params:
+        - SHIDC_B_Ki_67_subset_dataset
+        - common_train_params
+      outs:
+        - logs/retinanet_${item}_transformed/best.ckpt
+
+  train_mask_rcnn_model:
+    foreach:
+      - resnet50
+      - resnet101
+      - resnet152
+    do:
+      cmd: python src/mask_rcnn.py
+        --dirpath logs/mask_rcnn_${item}_transformed
+        --backbone ${item}
+        --group maskrcnn_${item}
+        --ds_data_dir ${SHIDC_B_Ki_67_subset_dataset}
+        ${common_train_params}
+      deps:
+        - src/mask_rcnn.py
+        - ${SHIDC_B_Ki_67_subset_dataset}_transformed
+      params:
+        - SHIDC_B_Ki_67_subset_dataset
+        - common_train_params
+      outs:
+        - logs/mask_rcnn_${item}_transformed/best.ckpt
+
+  train_ssd_model:
+    foreach:
+      - vgg16
+      - vgg19
+    do:
+      cmd: python src/ssd.py
+        --dirpath logs/ssd_${item}_transformed
+        --backbone ${item}
+        --group ssd_${item}
+        --ds_data_dir ${SHIDC_B_Ki_67_subset_dataset}
+        ${common_train_params}
+      deps:
+        - src/ssd.py
+        - ${SHIDC_B_Ki_67_subset_dataset}_transformed
+      params:
+        - SHIDC_B_Ki_67_subset_dataset
+        - common_train_params
+      outs:
+        - logs/ssd_${item}_transformed/best.ckpt
+
+  train_yolo_model:
+    cmd:
+      TRAIN_PATH=$PWD/${SHIDC_B_Ki_67_subset_dataset}_transformed/train/train.txt
+      TEST_PATH=$PWD/${SHIDC_B_Ki_67_subset_dataset}_transformed/test/test.txt
+      envsubst < src/darknet/data/obj.data.transformed.template > src/darknet/data/obj.data.transformed &&
+      mkdir -p logs/yolo_transformed &&
+      cd src/darknet &&
+      ./darknet
+      detector
+      train
+      data/obj.data.transformed
+      cfg/yolo-obj-transformed.cfg
+      yolov4.conv.137
+      -dont_show
+    deps:
+      - src/darknet/darknet
+      - ${SHIDC_B_Ki_67_subset_dataset}_transformed/train/train.txt
+      - ${SHIDC_B_Ki_67_subset_dataset}_transformed/test/test.txt
+    params:
+      - SHIDC_B_Ki_67_subset_dataset
+    outs:
+      - logs/yolo_transformed/yolo-obj-transformed_final.weights
+
+  train_pathonet_model:
+    cmd:
+      TRAIN_PATH=$PWD/${SHIDC_B_Ki_67_subset_dataset}_transformed_pathonet/train_pathonet
+      TEST_PATH=$PWD/${SHIDC_B_Ki_67_subset_dataset}_transformed_pathonet/test_pathonet
+      envsubst < src/PathoNet/configs/train.json.template > src/PathoNet/configs/train.json &&
+      cd src/PathoNet &&
+      LD_LIBRARY_PATH=../../.venv/lib/python3.10/site-packages/nvidia/cublas/lib:../../.venv/lib/python3.10/site-packages/nvidia/cuda_runtime/lib:../../.venv/lib/python3.10/site-packages/nvidia/cufft/lib:../../.venv/lib/python3.10/site-packages/nvidia/cusparse/lib
+      python train.py -c configs/train.json &&
+      cd ../../ &&
+      mv logs/PathoNet_* logs/pathonet_transformed &&
+      cp logs/pathonet_transformed/Checkpoint-30-*.hdf5 logs/pathonet_transformed/last.hdf5
+    deps:
+      - src/PathoNet/train.py
+      - ${SHIDC_B_Ki_67_subset_dataset}_transformed_pathonet/train/train.json
+      - ${SHIDC_B_Ki_67_subset_dataset}_transformed_pathonet/test/test.json
+    params:
+      - SHIDC_B_Ki_67_subset_dataset
+    outs:
+      - logs/pathonet_transformed
+
+  train_neg_lym_classifier_model:
+    cmd: python src/neg_lym_classifier.py
+      --ds_data_dir ${SHIDC_B_Ki_67_subset_dataset}
+      ${neg_lym_classifier_params}
+    deps:
+      - src/neg_lym_classifier.py
+      - ${SHIDC_B_Ki_67_subset_dataset}_transformed
+    params:
+      - SHIDC_B_Ki_67_subset_dataset
+      - neg_lym_classifier_params
+    outs:
+      - logs/neg_lym_resnet101_transformed/best.ckpt
+
+  # Run results
+  results_pytorch_SHIDC_B_Ki_67_train:
+    foreach:
+      - model: faster_rcnn
+        backbone: resnet50
+      - model: faster_rcnn
+        backbone: resnet101
+      - model: faster_rcnn
+        backbone: resnet152
+      - model: retinanet
+        backbone: resnet50
+      - model: retinanet
+        backbone: resnet101
+      - model: retinanet
+        backbone: resnet152
+      - model: mask_rcnn
+        backbone: resnet50
+      - model: mask_rcnn
+        backbone: resnet101
+      - model: mask_rcnn
+        backbone: resnet152
+      - model: ssd
+        backbone: vgg16
+      - model: ssd
+        backbone: vgg19
+    do:
+      cmd: python src/results.py
+        ${item.model}
+        ${item.backbone}
+        logs/${item.model}_${item.backbone}_transformed/best.ckpt
+        ${SHIDC_B_Ki_67_dataset}/train
+        12
+        --gpus=1
+        --detections_dir SHIDC_B_Ki_67_train_dataset_detections
+        --white_balance
+        --transformed
+      deps:
+        - src/results.py
+        - logs/${item.model}_${item.backbone}_transformed/best.ckpt
+        - ${SHIDC_B_Ki_67_subset_dataset}/train
+      params:
+        - SHIDC_B_Ki_67_dataset
+      outs:
+        - SHIDC_B_Ki_67_train_dataset_detections/${item.model}_${item.backbone}_transformed
+
+  results_pathonet_trained_SHIDC_B_Ki_67_train:
+    cmd: 
+      LD_LIBRARY_PATH=../../.venv/lib/python3.10/site-packages/nvidia/cublas/lib:../../.venv/lib/python3.10/site-packages/nvidia/cuda_runtime/lib:../../.venv/lib/python3.10/site-packages/nvidia/cufft/lib:../../.venv/lib/python3.10/site-packages/nvidia/cusparse/lib
+      python src/results.py
+      pathonet
+      trained
+      logs/pathonet_transformed/last.hdf5
+      ${SHIDC_B_Ki_67_dataset}/train
+      12
+      --gpus=1
+      --detections_dir SHIDC_B_Ki_67_train_dataset_detections
+      --white_balance
+      --transformed
+    deps:
+      - src/results.py
+      - logs/pathonet_transformed/last.hdf5
+      - ${SHIDC_B_Ki_67_subset_dataset}/train
+    params:
+      - SHIDC_B_Ki_67_dataset
+    outs:
+      - SHIDC_B_Ki_67_train_dataset_detections/pathonet_trained_transformed
+
+  results_pathonet_empty_SHIDC_B_Ki_67_train:
+    cmd:
+      LD_LIBRARY_PATH=../../.venv/lib/python3.10/site-packages/nvidia/cublas/lib:../../.venv/lib/python3.10/site-packages/nvidia/cuda_runtime/lib:../../.venv/lib/python3.10/site-packages/nvidia/cufft/lib:../../.venv/lib/python3.10/site-packages/nvidia/cusparse/lib
+      python src/results.py
+      pathonet
+      empty
+      src/PathoNet/pretrainedModels/PathoNet.hdf5
+      ${SHIDC_B_Ki_67_dataset}/train
+      12
+      --gpus=1
+      --detections_dir SHIDC_B_Ki_67_train_dataset_detections
+      --transformed
+      --tile_size 1228
+      --overlap 0
+    deps:
+      - src/results.py
+      - src/PathoNet/pretrainedModels/PathoNet.hdf5
+      - ${SHIDC_B_Ki_67_subset_dataset}/train
+    params:
+      - SHIDC_B_Ki_67_dataset
+    outs:
+      - SHIDC_B_Ki_67_train_dataset_detections/pathonet_empty_transformed
+
+  results_yolo_SHIDC_B_Ki_67_train:
+    cmd: python src/results.py
+      yolo
+      trained
+      logs/yolo_transformed/yolo-obj-transformed_last.weights
+      ${SHIDC_B_Ki_67_dataset}/train
+      12
+      --gpus=1
+      --detections_dir SHIDC_B_Ki_67_train_dataset_detections
+      --transformed
+      --white_balance
+    deps:
+      - src/results.py
+      - logs/yolo_transformed/yolo-obj-transformed_last.weights
+      - ${SHIDC_B_Ki_67_subset_dataset}/train
+    params:
+      - SHIDC_B_Ki_67_dataset
+    outs:
+      - SHIDC_B_Ki_67_train_dataset_detections/yolo_trained_transformed
+
+  results_pytorch_SHIDC_B_Ki_67:
+    foreach:
+      - model: faster_rcnn
+        backbone: resnet50
+      - model: faster_rcnn
+        backbone: resnet101
+      - model: faster_rcnn
+        backbone: resnet152
+      - model: retinanet
+        backbone: resnet50
+      - model: retinanet
+        backbone: resnet101
+      - model: retinanet
+        backbone: resnet152
+      - model: mask_rcnn
+        backbone: resnet50
+      - model: mask_rcnn
+        backbone: resnet101
+      - model: mask_rcnn
+        backbone: resnet152
+      - model: ssd
+        backbone: vgg16
+      - model: ssd
+        backbone: vgg19
+    do:
+      cmd: python src/results.py
+        ${item.model}
+        ${item.backbone}
+        logs/${item.model}_${item.backbone}_transformed/best.ckpt
+        ${SHIDC_B_Ki_67_dataset}/test
+        12
+        --gpus=1
+        --detections_dir SHIDC_B_Ki_67_dataset_detections
+        --white_balance
+        --transformed
+      deps:
+        - src/results.py
+        - logs/${item.model}_${item.backbone}_transformed/best.ckpt
+        - ${SHIDC_B_Ki_67_subset_dataset}/test
+      params:
+        - SHIDC_B_Ki_67_dataset
+      outs:
+        - SHIDC_B_Ki_67_dataset_detections/${item.model}_${item.backbone}_transformed
+
+  results_pathonet_trained_SHIDC_B_Ki_67:
+    cmd: 
+      LD_LIBRARY_PATH=../../.venv/lib/python3.10/site-packages/nvidia/cublas/lib:../../.venv/lib/python3.10/site-packages/nvidia/cuda_runtime/lib:../../.venv/lib/python3.10/site-packages/nvidia/cufft/lib:../../.venv/lib/python3.10/site-packages/nvidia/cusparse/lib
+      python src/results.py
+      pathonet
+      trained
+      logs/pathonet_transformed/last.hdf5
+      ${SHIDC_B_Ki_67_dataset}/test
+      12
+      --gpus=1
+      --detections_dir SHIDC_B_Ki_67_dataset_detections
+      --white_balance
+      --transformed
+    deps:
+      - src/results.py
+      - logs/pathonet_transformed/last.hdf5
+      - ${SHIDC_B_Ki_67_subset_dataset}/test
+    params:
+      - SHIDC_B_Ki_67_dataset
+    outs:
+      - SHIDC_B_Ki_67_dataset_detections/pathonet_trained_transformed
+
+  results_pathonet_empty_SHIDC_B_Ki_67:
+    cmd: 
+      LD_LIBRARY_PATH=../../.venv/lib/python3.10/site-packages/nvidia/cublas/lib:../../.venv/lib/python3.10/site-packages/nvidia/cuda_runtime/lib:../../.venv/lib/python3.10/site-packages/nvidia/cufft/lib:../../.venv/lib/python3.10/site-packages/nvidia/cusparse/lib
+      python src/results.py
+      pathonet
+      empty
+      src/PathoNet/pretrainedModels/PathoNet.hdf5
+      ${SHIDC_B_Ki_67_dataset}/test
+      12
+      --gpus=1
+      --detections_dir SHIDC_B_Ki_67_dataset_detections
+      --transformed
+      --tile_size 1228
+      --overlap 0
+    deps:
+      - src/results.py
+      - src/PathoNet/pretrainedModels/PathoNet.hdf5
+      - ${SHIDC_B_Ki_67_subset_dataset}/test
+    params:
+      - SHIDC_B_Ki_67_dataset
+    outs:
+      - SHIDC_B_Ki_67_dataset_detections/pathonet_empty_transformed
+
+  results_yolo_SHIDC_B_Ki_67:
+    cmd: python src/results.py
+      yolo
+      trained
+      logs/yolo_transformed/yolo-obj-transformed_final.weights
+      ${SHIDC_B_Ki_67_dataset}/test
+      12
+      --gpus=1
+      --detections_dir SHIDC_B_Ki_67_dataset_detections
+      --transformed
+      --white_balance
+    deps:
+      - src/results.py
+      - logs/yolo_transformed/yolo-obj-transformed_final.weights
+      - ${SHIDC_B_Ki_67_subset_dataset}/test
+    params:
+      - SHIDC_B_Ki_67_dataset
+    outs:
+      - SHIDC_B_Ki_67_dataset_detections/yolo_trained_transformed
+
+  results_pytorch_SHIDC_B_Ki_67_supertest:
+    foreach:
+      - model: faster_rcnn
+        backbone: resnet50
+      - model: faster_rcnn
+        backbone: resnet101
+      - model: faster_rcnn
+        backbone: resnet152
+      - model: retinanet
+        backbone: resnet50
+      - model: retinanet
+        backbone: resnet101
+      - model: retinanet
+        backbone: resnet152
+      - model: mask_rcnn
+        backbone: resnet50
+      - model: mask_rcnn
+        backbone: resnet101
+      - model: mask_rcnn
+        backbone: resnet152
+      - model: ssd
+        backbone: vgg16
+      - model: ssd
+        backbone: vgg19
+    do:
+      cmd: python src/results.py
+        ${item.model}
+        ${item.backbone}
+        logs/${item.model}_${item.backbone}_transformed/best.ckpt
+        ${SHIDC_B_Ki_67_supertest_dataset}
+        12
+        --gpus=1
+        --detections_dir SHIDC_B_Ki_67_supertest_dataset_detections
+        --white_balance
+        --transformed
+      deps:
+        - src/results.py
+        - logs/${item.model}_${item.backbone}_transformed/best.ckpt
+        - ${SHIDC_B_Ki_67_supertest_dataset}
+      params:
+        - SHIDC_B_Ki_67_supertest_dataset
+      outs:
+        - SHIDC_B_Ki_67_supertest_dataset_detections/${item.model}_${item.backbone}_transformed
+
+  results_pathonet_trained_SHIDC_B_Ki_67_supertest:
+    cmd: 
+      LD_LIBRARY_PATH=../../.venv/lib/python3.10/site-packages/nvidia/cublas/lib:../../.venv/lib/python3.10/site-packages/nvidia/cuda_runtime/lib:../../.venv/lib/python3.10/site-packages/nvidia/cufft/lib:../../.venv/lib/python3.10/site-packages/nvidia/cusparse/lib
+      python src/results.py
+      pathonet
+      trained
+      logs/pathonet_transformed/last.hdf5
+      ${SHIDC_B_Ki_67_supertest_dataset}
+      12
+      --gpus=1
+      --detections_dir SHIDC_B_Ki_67_supertest_dataset_detections
+      --white_balance
+      --transformed
+    deps:
+      - src/results.py
+      - logs/pathonet_transformed/last.hdf5
+      - ${SHIDC_B_Ki_67_subset_dataset}
+    params:
+      - SHIDC_B_Ki_67_supertest_dataset
+    outs:
+      - SHIDC_B_Ki_67_supertest_dataset_detections/pathonet_trained_transformed
+
+  results_pathonet_empty_SHIDC_B_Ki_67_supertest:
+    cmd: 
+      LD_LIBRARY_PATH=../../.venv/lib/python3.10/site-packages/nvidia/cublas/lib:../../.venv/lib/python3.10/site-packages/nvidia/cuda_runtime/lib:../../.venv/lib/python3.10/site-packages/nvidia/cufft/lib:../../.venv/lib/python3.10/site-packages/nvidia/cusparse/lib
+      python src/results.py
+      pathonet
+      empty
+      src/PathoNet/pretrainedModels/PathoNet.hdf5
+      ${SHIDC_B_Ki_67_supertest_dataset}
+      12
+      --gpus=1
+      --detections_dir SHIDC_B_Ki_67_supertest_dataset_detections
+      --transformed
+      --tile_size 1228
+      --overlap 0
+    deps:
+      - src/results.py
+      - src/PathoNet/pretrainedModels/PathoNet.hdf5
+      - ${SHIDC_B_Ki_67_subset_dataset}
+    params:
+      - SHIDC_B_Ki_67_supertest_dataset
+    outs:
+      - SHIDC_B_Ki_67_supertest_dataset_detections/pathonet_empty_transformed
+
+  results_yolo_SHIDC_B_Ki_67_supertest:
+    cmd: python src/results.py
+      yolo
+      trained
+      logs/yolo_transformed/yolo-obj-transformed_last.weights
+      ${SHIDC_B_Ki_67_supertest_dataset}
+      12
+      --gpus=1
+      --detections_dir SHIDC_B_Ki_67_supertest_dataset_detections
+      --transformed
+      --white_balance
+    deps:
+      - src/results.py
+      - logs/yolo_transformed/yolo-obj-transformed_last.weights
+      - ${SHIDC_B_Ki_67_supertest_dataset}
+    params:
+      - SHIDC_B_Ki_67_supertest_dataset
+    outs:
+      - SHIDC_B_Ki_67_supertest_dataset_detections/yolo_trained_transformed
+
+  results_pytorch_LSOC_Ki_67:
+    foreach:
+      - model: faster_rcnn
+        backbone: resnet50
+      - model: faster_rcnn
+        backbone: resnet101
+      - model: faster_rcnn
+        backbone: resnet152
+      - model: retinanet
+        backbone: resnet50
+      - model: retinanet
+        backbone: resnet101
+      - model: retinanet
+        backbone: resnet152
+      - model: mask_rcnn
+        backbone: resnet50
+      - model: mask_rcnn
+        backbone: resnet101
+      - model: mask_rcnn
+        backbone: resnet152
+      - model: ssd
+        backbone: vgg16
+      - model: ssd
+        backbone: vgg19
+    do:
+      cmd: python src/results.py
+        ${item.model}
+        ${item.backbone}
+        logs/${item.model}_${item.backbone}_transformed/best.ckpt
+        ${LSOC_Ki_67_dataset}
+        12
+        --gpus=1
+        --detections_dir LSOC_Ki_67_dataset_detections
+        --white_balance
+        --transformed
+      deps:
+        - src/results.py
+        - logs/${item.model}_${item.backbone}_transformed/best.ckpt
+        - ${LSOC_Ki_67_dataset}
+      params:
+        - LSOC_Ki_67_dataset
+      outs:
+        - LSOC_Ki_67_dataset_detections/${item.model}_${item.backbone}_transformed
+
+  results_pathonet_trained_LSOC_Ki_67:
+    cmd: 
+      LD_LIBRARY_PATH=../../.venv/lib/python3.10/site-packages/nvidia/cublas/lib:../../.venv/lib/python3.10/site-packages/nvidia/cuda_runtime/lib:../../.venv/lib/python3.10/site-packages/nvidia/cufft/lib:../../.venv/lib/python3.10/site-packages/nvidia/cusparse/lib
+      python src/results.py
+      pathonet
+      trained
+      logs/pathonet_transformed/last.hdf5
+      ${LSOC_Ki_67_dataset}
+      12
+      --gpus=1
+      --detections_dir LSOC_Ki_67_dataset_detections
+      --white_balance
+      --transformed
+    deps:
+      - src/results.py
+      - logs/pathonet_transformed/last.hdf5
+      - ${LSOC_Ki_67_dataset}
+    params:
+      - LSOC_Ki_67_dataset
+    outs:
+      - LSOC_Ki_67_dataset_detections/pathonet_trained_transformed
+
+  results_pathonet_empty_LSOC_Ki_67:
+    cmd: 
+      LD_LIBRARY_PATH=../../.venv/lib/python3.10/site-packages/nvidia/cublas/lib:../../.venv/lib/python3.10/site-packages/nvidia/cuda_runtime/lib:../../.venv/lib/python3.10/site-packages/nvidia/cufft/lib:../../.venv/lib/python3.10/site-packages/nvidia/cusparse/lib
+      python src/results.py
+      pathonet
+      empty
+      src/PathoNet/pretrainedModels/PathoNet.hdf5
+      ${LSOC_Ki_67_dataset}
+      12
+      --gpus=1
+      --detections_dir LSOC_Ki_67_dataset_detections
+      --pathonet_balance
+      --transformed
+      --tile_size 1228
+      --overlap 0
+    deps:
+      - src/results.py
+      - src/PathoNet/pretrainedModels/PathoNet.hdf5
+      - ${LSOC_Ki_67_dataset}
+    params:
+      - LSOC_Ki_67_dataset
+    outs:
+      - LSOC_Ki_67_dataset_detections/pathonet_empty_transformed
+
+  results_yolo_LSOC_Ki_67:
+    cmd: python src/results.py
+      yolo
+      trained
+      logs/yolo_transformed/yolo-obj-transformed_last.weights
+      ${LSOC_Ki_67_dataset}
+      12
+      --gpus=1
+      --detections_dir LSOC_Ki_67_dataset_detections
+      --transformed
+      --white_balance
+    deps:
+      - src/results.py
+      - logs/yolo_transformed/yolo-obj-transformed_last.weights
+      - ${SHIDC_B_Ki_67_supertest_dataset}
+    params:
+      - LSOC_Ki_67_dataset
+
+  # Recalculate detections
+  recalculate_pytorch_SHIDC_B_Ki_67_train:
+    foreach:
+      - model: faster_rcnn
+        backbone: resnet50
+      - model: faster_rcnn
+        backbone: resnet101
+      - model: faster_rcnn
+        backbone: resnet152
+      - model: retinanet
+        backbone: resnet50
+      - model: retinanet
+        backbone: resnet101
+      - model: retinanet
+        backbone: resnet152
+      - model: mask_rcnn
+        backbone: resnet50
+      - model: mask_rcnn
+        backbone: resnet101
+      - model: mask_rcnn
+        backbone: resnet152
+      - model: ssd
+        backbone: vgg16
+      - model: ssd
+        backbone: vgg19
+    do:
+      cmd: python src/recalculate_detections_npz.py
+        SHIDC_B_Ki_67_train_dataset_detections/${item.model}_${item.backbone}_transformed/
+        ${SHIDC_B_Ki_67_dataset}/train
+        --white_balance
+        --checkpoint logs/neg_lym_resnet101_transformed/best.ckpt
+      deps:
+        - src/recalculate_detections_npz.py
+        - SHIDC_B_Ki_67_train_dataset_detections/${item.model}_${item.backbone}_transformed/
+        - ${SHIDC_B_Ki_67_subset_dataset}/train
+      params:
+        - SHIDC_B_Ki_67_dataset
+
+  recalculate_yolo_SHIDC_B_Ki_67_train:
+    cmd: python src/recalculate_detections_npz.py
+      SHIDC_B_Ki_67_train_dataset_detections/yolo_trained_transformed/
+      ${SHIDC_B_Ki_67_dataset}/train
+      --white_balance
+      --checkpoint logs/neg_lym_resnet101_transformed/best.ckpt
+    deps:
+      - src/recalculate_detections_npz.py
+      - SHIDC_B_Ki_67_train_dataset_detections/yolo_trained_transformed/
+      - ${SHIDC_B_Ki_67_subset_dataset}/train
+    params:
+      - SHIDC_B_Ki_67_dataset
+
+  recalculate_pytorch_SHIDC_B_Ki_67:
+    foreach:
+      - model: faster_rcnn
+        backbone: resnet50
+      - model: faster_rcnn
+        backbone: resnet101
+      - model: faster_rcnn
+        backbone: resnet152
+      - model: retinanet
+        backbone: resnet50
+      - model: retinanet
+        backbone: resnet101
+      - model: retinanet
+        backbone: resnet152
+      - model: mask_rcnn
+        backbone: resnet50
+      - model: mask_rcnn
+        backbone: resnet101
+      - model: mask_rcnn
+        backbone: resnet152
+      - model: ssd
+        backbone: vgg16
+      - model: ssd
+        backbone: vgg19
+    do:
+      cmd: python src/recalculate_detections_npz.py
+        SHIDC_B_Ki_67_dataset_detections/${item.model}_${item.backbone}_transformed/
+        ${SHIDC_B_Ki_67_dataset}/test
+        --white_balance
+        --checkpoint logs/neg_lym_resnet101_transformed/best.ckpt
+      deps:
+        - src/recalculate_detections_npz.py
+        - SHIDC_B_Ki_67_dataset_detections/${item.model}_${item.backbone}_transformed/
+        - ${SHIDC_B_Ki_67_subset_dataset}/test
+      params:
+        - SHIDC_B_Ki_67_dataset
+
+  recalculate_yolo_SHIDC_B_Ki_67:
+    cmd: python src/recalculate_detections_npz.py
+      SHIDC_B_Ki_67_dataset_detections/yolo_trained_transformed/
+      ${SHIDC_B_Ki_67_dataset}/test
+      --white_balance
+      --checkpoint logs/neg_lym_resnet101_transformed/best.ckpt
+    deps:
+      - src/recalculate_detections_npz.py
+      - SHIDC_B_Ki_67_dataset_detections/yolo_trained_transformed/
+      - ${SHIDC_B_Ki_67_subset_dataset}/test
+    params:
+      - SHIDC_B_Ki_67_dataset
+
+  recalculate_pytorch_SHIDC_B_Ki_67_supertest:
+    foreach:
+      - model: faster_rcnn
+        backbone: resnet50
+      - model: faster_rcnn
+        backbone: resnet101
+      - model: faster_rcnn
+        backbone: resnet152
+      - model: retinanet
+        backbone: resnet50
+      - model: retinanet
+        backbone: resnet101
+      - model: retinanet
+        backbone: resnet152
+      - model: mask_rcnn
+        backbone: resnet50
+      - model: mask_rcnn
+        backbone: resnet101
+      - model: mask_rcnn
+        backbone: resnet152
+      - model: ssd
+        backbone: vgg16
+      - model: ssd
+        backbone: vgg19
+    do:
+      cmd: python src/recalculate_detections_npz.py
+        SHIDC_B_Ki_67_supertest_dataset_detections/${item.model}_${item.backbone}_transformed/
+        ${SHIDC_B_Ki_67_supertest_dataset}
+        --white_balance
+        --checkpoint logs/neg_lym_resnet101_transformed/best.ckpt
+      deps:
+        - src/recalculate_detections_npz.py
+        - SHIDC_B_Ki_67_supertest_dataset_detections/${item.model}_${item.backbone}_transformed/
+        - ${SHIDC_B_Ki_67_supertest_dataset}
+      params:
+        - SHIDC_B_Ki_67_supertest_dataset
+
+  recalculate_pytorch_LSOC_Ki_67:
+    foreach:
+      - model: faster_rcnn
+        backbone: resnet50
+      - model: faster_rcnn
+        backbone: resnet101
+      - model: faster_rcnn
+        backbone: resnet152
+      - model: retinanet
+        backbone: resnet50
+      - model: retinanet
+        backbone: resnet101
+      - model: retinanet
+        backbone: resnet152
+      - model: mask_rcnn
+        backbone: resnet50
+      - model: mask_rcnn
+        backbone: resnet101
+      - model: mask_rcnn
+        backbone: resnet152
+      - model: ssd
+        backbone: vgg16
+      - model: ssd
+        backbone: vgg19
+    do:
+      cmd: python src/recalculate_detections_npz.py
+        LSOC_Ki_67_dataset_detections/${item.model}_${item.backbone}_transformed/
+        ${LSOC_Ki_67_dataset}
+        --white_balance
+        --checkpoint logs/neg_lym_resnet101_transformed/best.ckpt
+      deps:
+        - src/recalculate_detections_npz.py
+        - LSOC_Ki_67_dataset_detections/${item.model}_${item.backbone}_transformed/
+        - ${LSOC_Ki_67_dataset}
+      params:
+        - LSOC_Ki_67_dataset
+
+  # Get IOU_threashold and MIN_thresholds from training dataset
+  combine_results_pytorch_SHIDC_B_Ki_67_train:
+    foreach:
+      - model: faster_rcnn
+        backbone: resnet50
+      - model: faster_rcnn
+        backbone: resnet101
+      - model: faster_rcnn
+        backbone: resnet152
+      - model: retinanet
+        backbone: resnet50
+      - model: retinanet
+        backbone: resnet101
+      - model: retinanet
+        backbone: resnet152
+      - model: mask_rcnn
+        backbone: resnet50
+      - model: mask_rcnn
+        backbone: resnet101
+      - model: mask_rcnn
+        backbone: resnet152
+      - model: ssd
+        backbone: vgg16
+      - model: ssd
+        backbone: vgg19
+    do:
+      cmd: python src/combine_npz.py
+        SHIDC_B_Ki_67_train_dataset_detections/${item.model}_${item.backbone}_transformed/
+        ${SHIDC_B_Ki_67_dataset}/train
+        --white_balance
+        --recalc
+      deps:
+        - src/combine_npz.py
+        - SHIDC_B_Ki_67_train_dataset_detections/${item.model}_${item.backbone}_transformed/
+        - ${SHIDC_B_Ki_67_dataset}/train
+      params:
+        - SHIDC_B_Ki_67_dataset
+
+  combine_pathonet_trained_SHIDC_B_Ki_67_train:
+    cmd: python src/combine_npz.py
+      SHIDC_B_Ki_67_train_dataset_detections/pathonet_trained_transformed/
+      ${SHIDC_B_Ki_67_dataset}/train
+      --white_balance
+    deps:
+      - src/combine_npz.py
+      - SHIDC_B_Ki_67_train_dataset_detections/pathonet_trained_transformed/
+      - ${SHIDC_B_Ki_67_dataset}/train
+    params:
+      - SHIDC_B_Ki_67_dataset
+
+  combine_pathonet_empty_SHIDC_B_Ki_67_train:
+    cmd: python src/combine_npz.py
+      SHIDC_B_Ki_67_train_dataset_detections/pathonet_empty_transformed/
+      ${SHIDC_B_Ki_67_dataset}/train
+      --tile_size 1228
+      --overlap 0
+    deps:
+      - src/combine_npz.py
+      - SHIDC_B_Ki_67_train_dataset_detections/pathonet_empty_transformed/
+      - ${SHIDC_B_Ki_67_dataset}/train
+    params:
+      - SHIDC_B_Ki_67_dataset
+
+  # Calculate metrics
+  combine_results_pytorch_SHIDC_B_Ki_67:
+    foreach:
+      - model: faster_rcnn
+        backbone: resnet50
+        iou_threshold: 0.3
+        min_threshold: 0.5
+      - model: faster_rcnn
+        backbone: resnet101
+        iou_threshold: 0.3
+        min_threshold: 0.7
+      - model: faster_rcnn
+        backbone: resnet152
+        iou_threshold: 0.3
+        min_threshold: 0.6
+      - model: retinanet
+        backbone: resnet50
+        iou_threshold: 0.3
+        min_threshold: 0.4
+      - model: retinanet
+        backbone: resnet101
+        iou_threshold: 0.3
+        min_threshold: 0.4
+      - model: retinanet
+        backbone: resnet152
+        iou_threshold: 0.3
+        min_threshold: 0.5
+      - model: mask_rcnn
+        backbone: resnet50
+        iou_threshold: 0.3
+        min_threshold: 0.5
+      - model: mask_rcnn
+        backbone: resnet101
+        iou_threshold: 0.3
+        min_threshold: 0.7
+      - model: mask_rcnn
+        backbone: resnet152
+        iou_threshold: 0.3
+        min_threshold: 0.4
+      - model: ssd
+        backbone: vgg16
+        iou_threshold: 0.2
+        min_threshold: 0.3
+      - model: ssd
+        backbone: vgg19
+        iou_threshold: 0.2
+        min_threshold: 0.3
+    do:
+      cmd: python src/combine_npz.py
+        SHIDC_B_Ki_67_dataset_detections/${item.model}_${item.backbone}_transformed/
+        ${SHIDC_B_Ki_67_dataset}/test
+        --white_balance
+        --recalc
+        --iou_threshold ${item.iou_threshold}
+        --min_threshold ${item.min_threshold}
+      deps:
+        - src/combine_npz.py
+        - SHIDC_B_Ki_67_dataset_detections/${item.model}_${item.backbone}_transformed/
+        - ${SHIDC_B_Ki_67_dataset}/test
+      params:
+        - SHIDC_B_Ki_67_dataset
+
+  combine_pathonet_trained_SHIDC_B_Ki_67:
+    cmd: python src/combine_npz.py
+      SHIDC_B_Ki_67_dataset_detections/pathonet_trained_transformed/
+      ${SHIDC_B_Ki_67_dataset}/test
+      --white_balance
+      --iou_threshold 0.3
+      --min_threshold 0.0
+      --save_images
+    deps:
+      - src/combine_npz.py
+      - SHIDC_B_Ki_67_dataset_detections/pathonet_trained_transformed/
+      - ${SHIDC_B_Ki_67_dataset}/test
+    params:
+      - SHIDC_B_Ki_67_dataset
+
+  combine_pathonet_empty_SHIDC_B_Ki_67:
+    cmd: python src/combine_npz.py
+      SHIDC_B_Ki_67_dataset_detections/pathonet_empty_transformed/
+      ${SHIDC_B_Ki_67_dataset}/test
+      --tile_size 1228
+      --overlap 0
+      --iou_threshold 0.3
+      --min_threshold 0.0
+      --save_images
+    deps:
+      - src/combine_npz.py
+      - SHIDC_B_Ki_67_dataset_detections/pathonet_empty_transformed/
+      - ${SHIDC_B_Ki_67_dataset}/test
+    params:
+      - SHIDC_B_Ki_67_dataset
+
+  combine_results_pytorch_SHIDC_B_Ki_67_supertest:
+    foreach:
+      - model: faster_rcnn
+        backbone: resnet50
+        iou_threshold: 0.3
+        min_threshold: 0.5
+      - model: faster_rcnn
+        backbone: resnet101
+        iou_threshold: 0.3
+        min_threshold: 0.7
+      - model: faster_rcnn
+        backbone: resnet152
+        iou_threshold: 0.3
+        min_threshold: 0.6
+      - model: retinanet
+        backbone: resnet50
+        iou_threshold: 0.3
+        min_threshold: 0.4
+      - model: retinanet
+        backbone: resnet101
+        iou_threshold: 0.3
+        min_threshold: 0.4
+      - model: retinanet
+        backbone: resnet152
+        iou_threshold: 0.3
+        min_threshold: 0.5
+      - model: mask_rcnn
+        backbone: resnet50
+        iou_threshold: 0.3
+        min_threshold: 0.5
+      - model: mask_rcnn
+        backbone: resnet101
+        iou_threshold: 0.3
+        min_threshold: 0.7
+      - model: mask_rcnn
+        backbone: resnet152
+        iou_threshold: 0.3
+        min_threshold: 0.4
+      - model: ssd
+        backbone: vgg16
+        iou_threshold: 0.2
+        min_threshold: 0.3
+      - model: ssd
+        backbone: vgg19
+        iou_threshold: 0.2
+        min_threshold: 0.3
+    do:
+      cmd: python src/combine_npz.py
+        SHIDC_B_Ki_67_supertest_dataset_detections/${item.model}_${item.backbone}_transformed/
+        ${SHIDC_B_Ki_67_supertest_dataset}
+        --white_balance
+        --recalc
+        --iou_threshold ${item.iou_threshold}
+        --min_threshold ${item.min_threshold}
+      deps:
+        - src/combine_npz.py
+        - SHIDC_B_Ki_67_supertest_dataset_detections/${item.model}_${item.backbone}_transformed/
+        - ${SHIDC_B_Ki_67_supertest_dataset}
+      params:
+        - SHIDC_B_Ki_67_supertest_dataset
+
+  combine_pathonet_trained_SHIDC_B_Ki_67_supertest:
+    cmd: python src/combine_npz.py
+      SHIDC_B_Ki_67_supertest_dataset_detections/pathonet_trained_transformed/
+      ${SHIDC_B_Ki_67_supertest_dataset}
+      --white_balance
+      --iou_threshold 0.3
+      --min_threshold 0.0
+      --save_images
+    deps:
+      - src/combine_npz.py
+      - SHIDC_B_Ki_67_supertest_dataset_detections/pathonet_trained_transformed/
+      - ${SHIDC_B_Ki_67_supertest_dataset}
+    params:
+      - SHIDC_B_Ki_67_supertest_dataset
+
+  combine_pathonet_empty_SHIDC_B_Ki_67_supertest:
+    cmd: python src/combine_npz.py
+      SHIDC_B_Ki_67_supertest_dataset_detections/pathonet_empty_transformed/
+      ${SHIDC_B_Ki_67_supertest_dataset}
+      --tile_size 1228
+      --overlap 0
+      --iou_threshold 0.3
+      --min_threshold 0.0
+      --save_images
+    deps:
+      - src/combine_npz.py
+      - SHIDC_B_Ki_67_supertest_dataset_detections/pathonet_empty_transformed/
+      - ${SHIDC_B_Ki_67_supertest_dataset}
+    params:
+      - SHIDC_B_Ki_67_supertest_dataset
+
+  combine_results_pytorch_LSOC_Ki_67:
+    foreach:
+      - model: faster_rcnn
+        backbone: resnet50
+        iou_threshold: 0.3
+        min_threshold: 0.5
+      - model: faster_rcnn
+        backbone: resnet101
+        iou_threshold: 0.3
+        min_threshold: 0.7
+      - model: faster_rcnn
+        backbone: resnet152
+        iou_threshold: 0.3
+        min_threshold: 0.6
+      - model: retinanet
+        backbone: resnet50
+        iou_threshold: 0.3
+        min_threshold: 0.4
+      - model: retinanet
+        backbone: resnet101
+        iou_threshold: 0.3
+        min_threshold: 0.4
+      - model: retinanet
+        backbone: resnet152
+        iou_threshold: 0.3
+        min_threshold: 0.5
+      - model: mask_rcnn
+        backbone: resnet50
+        iou_threshold: 0.3
+        min_threshold: 0.5
+      - model: mask_rcnn
+        backbone: resnet101
+        iou_threshold: 0.3
+        min_threshold: 0.7
+      - model: mask_rcnn
+        backbone: resnet152
+        iou_threshold: 0.3
+        min_threshold: 0.4
+      - model: ssd
+        backbone: vgg16
+        iou_threshold: 0.2
+        min_threshold: 0.3
+      - model: ssd
+        backbone: vgg19
+        iou_threshold: 0.2
+        min_threshold: 0.3
+    do:
+      cmd: python src/combine_npz.py
+        LSOC_Ki_67_dataset_detections/${item.model}_${item.backbone}_transformed/
+        ${LSOC_Ki_67_dataset}
+        --white_balance
+        --recalc
+        --iou_threshold ${item.iou_threshold}
+        --min_threshold ${item.min_threshold}
+      deps:
+        - src/combine_npz.py
+        - LSOC_Ki_67_dataset_detections/${item.model}_${item.backbone}_transformed/
+        - ${LSOC_Ki_67_dataset}
+      params:
+        - LSOC_Ki_67_dataset
+  
+  combine_pathonet_trained_LSOC_Ki_67:
+    cmd: python src/combine_npz.py
+      LSOC_Ki_67_dataset_detections/pathonet_trained_transformed/
+      ${LSOC_Ki_67_dataset}
+      --white_balance
+      --iou_threshold 0.3
+      --min_threshold 0.0
+      --save_images
+    deps:
+      - src/combine_npz.py
+      - LSOC_Ki_67_dataset_detections/pathonet_trained_transformed/
+      - ${LSOC_Ki_67_dataset}
+    params:
+      - LSOC_Ki_67_dataset
+
+  combine_pathonet_empty_LSOC_Ki_67:
+    cmd: python src/combine_npz.py
+      LSOC_Ki_67_dataset_detections/pathonet_empty_transformed/
+      ${LSOC_Ki_67_dataset}
+      --tile_size 1228
+      --overlap 0
+      --iou_threshold 0.3
+      --min_threshold 0.0
+      --save_images
+      --pathonet_balance
+    deps:
+      - src/combine_npz.py
+      - LSOC_Ki_67_dataset_detections/pathonet_empty_transformed/
+      - ${LSOC_Ki_67_dataset}
+    params:
+      - LSOC_Ki_67_dataset
+

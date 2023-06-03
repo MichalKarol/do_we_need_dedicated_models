@@ -1,0 +1,34 @@
+SHIDC_B_Ki_67_subset_dataset: datasets/SHIDC-B-Ki-67-subset
+
+SHIDC_B_Ki_67_dataset: datasets/SHIDC-B-Ki-67
+SHIDC_B_Ki_67_supertest_dataset: datasets/SHIDC-B-Ki-67-supertest
+LSOC_Ki_67_dataset: datasets/LSOC-Ki-67
+
+common_train_params:
+  project: paper_1
+  ds_batch_size: 2
+  ds_num_workers: 6
+  max_epochs: 200
+  es_patience: 10
+  es_monitor: avg_map_75
+  es_mode: max
+  save_top_k: 1
+  monitor: avg_map_75
+  mode: max
+  ds_enable_transformations: true
+  gpus: 1
+
+neg_lym_classifier_params:
+  dirpath: logs/neg_lym_resnet101_transformed
+  group: neg_lym_resnet101
+  monitor: avg_f1
+  es_monitor: avg_f1
+  project: paper_1
+  ds_batch_size: 4
+  ds_num_workers: 6
+  max_epochs: 200
+  es_patience: 10
+  es_mode: max
+  save_top_k: 1
+  mode: max
+  gpus: 1

@@ -1,0 +1,12 @@
+wandb
+.venv
+.vscode
+.history
+logs
+*.ckpt
+*.png
+*.jpg
+*.jpeg
+__pycache__
+lightning_logs
+.ipynb_checkpoints
